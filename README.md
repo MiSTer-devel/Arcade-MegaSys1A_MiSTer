@@ -1,9 +1,11 @@
 
 # Jaleco Mega System 1 A FPGA Implementation
 
-FPGA compatible core of Jaleco's Mega System 1 A (P-47 based) arcade hardware for [**MiSTerFPGA**](https://github.com/MiSTer-devel/Main_MiSTer/wiki) written by [**Erin Olafson**] with assistance from [**atrac17**](https://github.com/atrac17). Verified against a authentic P-47: The Freedom Fighter PCB purchased by [**atrac17**](https://github.com/atrac17).
+FPGA compatible core of Jaleco's Mega System 1 A (P-47 based) arcade hardware for [**MiSTerFPGA**](https://github.com/MiSTer-devel/Main_MiSTer/wiki) written by [**Erin Olafson**] with assistance from [**atrac17**](https://github.com/atrac17). Verified against a authentic P-47: The Freedom Fighter PCB purchased by [**atrac17**](https://github.com/atrac17). Maintenance and miscellaneous quality of life features added by TheJesusfish
 
-The intent is for this core to be a 1:1 playable implementation of the Mega System 1 A arcade hardware. Currently in **beta state**, this core is in active development. Additional Mega System 1 arcade titles will be in separate repositories (Mega System 1 Rev Z/B/C).
+The intent is for this core to be a 1:1 playable implementation of the Mega System 1 A arcade hardware. When it was last updated in early 2024, the core was labeled as **Beta / WIP**.
+
+This version of the core appends `[MD]` to the end of MRA names so that it can live alongside the legacy core.
 
 <br>
 <p align="center">
@@ -31,16 +33,18 @@ The intent is for this core to be a 1:1 playable implementation of the Mega Syst
 
 ## External Modules
 
-| Module                                                                                | Function                                                               | Author                                         |
-|---------------------------------------------------------------------------------------|------------------------------------------------------------------------|------------------------------------------------|
-| [**fx68k**](https://github.com/ijor/fx68k)                                            | [**Motorola 68000 CPU**](https://en.wikipedia.org/wiki/Motorola_68000) | Jorge Cwik                                     |
-| [**fx68k**](https://github.com/ijor/fx68k)                                            | [**Motorola 68000 CPU**](https://en.wikipedia.org/wiki/Motorola_68000) | Jorge Cwik                                     |
-| [**jt51**](https://github.com/jotego/jt51)                                            | [**Yamaha YM2151**](https://en.wikipedia.org/wiki/Yamaha_YM2151)       | Jose Tejada                                    |
-| [**jt6295**](https://github.com/jotego/jt6295)                                        | [**OKI MSM6295**](https://dtsheet.com/doc/957023/oki-m6295)            | Jose Tejada                                    |
-| [**jt6295**](https://github.com/jotego/jt6295)                                        | [**OKI MSM6295**](https://dtsheet.com/doc/957023/oki-m6295)            | Jose Tejada                                    |
-| [**yc_out**](https://github.com/MikeS11/MiSTerFPGA_YC_Encoder)                        | [**Y/C Video Module**](https://en.wikipedia.org/wiki/S-Video)          | Mike Simone                                    |
-| [**mem**](https://github.com/MiSTer-devel/Arcade-Rygar_MiSTer/tree/master/src/mem)    | SDRAM Controller / Rom Downloader                                      | Josh Bassett, modified by Erin Olafson       |
-| [**core_template**](https://github.com/MiSTer-devel/Template_MiSTer)                  | MiSTer Framework Template                                              | sorgelig, modified by Erin Olafson / atrac17 |
+| Module | Function | Author | Source / commit | License |
+|--------|----------|--------|-----------------|---------|
+| [**fx68k**](https://github.com/ijor/fx68k) | [**Motorola 68000 CPU**](https://en.wikipedia.org/wiki/Motorola_68000) (main and sound) | Jorge Cwik | `rtl/modules/fx68k`, ijor/fx68k @ 0602ee4 | GPL-3.0 |
+| [**IKAOPM**](https://github.com/ika-musume/IKAOPM) | [**Yamaha YM2151**](https://en.wikipedia.org/wiki/Yamaha_YM2151) | Raki (ika-musume) | `rtl/modules/ikaopm`, ika-musume/IKAOPM @ 08a5b40 | BSD-2-Clause |
+| [**jt6295**](https://github.com/jotego/jt6295) | [**OKI MSM6295**](https://dtsheet.com/doc/957023/oki-m6295) (×2) | Jose Tejada | `rtl/modules/jt6295`, jotego/jt6295 @ 65a5fe1 | GPL-3.0 |
+| [**Save states**](https://github.com/MiSTer-devel/Arcade-TaitoF2_MiSTer) | DDRAM state streamer, state bus, save/load UI | Martin Donlon (wickerwaka) | `rtl/savestate`, MiSTer-devel/Arcade-TaitoF2_MiSTer @ 9438df9 (unmodified) | GPL-2.0 |
+| [**mem**](https://github.com/MiSTer-devel/Arcade-Rygar_MiSTer/tree/master/src/mem) | SDRAM Controller / Rom Downloader | Josh Bassett, modified by Erin Olafson | `rtl/mem` | MIT |
+| [**Pause**](https://github.com/JimmyStones/Pause_MiSTer) | OSD / button pause and dim | Jim Gregory, modified by Erin Olafson | `rtl/pause.v` | GPL-3.0 |
+| [**core_template**](https://github.com/MiSTer-devel/Template_MiSTer) | MiSTer Framework Template (incl. yc_out by Mike Simone) | sorgelig and contributors | `sys/`, MiSTer-devel/Template_MiSTer @ e901a9f (unmodified) | GPL-3.0 |
+
+High-score data comes from MAME's `plugins/hiscore/hiscore.dat` (MAME 0.288); ROM layouts and DIP switches from MAME
+0.288 `-listxml` and, where they exist, the games' Jaleco DIP sheets.
 
 # Known Issues / Tasks
 
@@ -176,4 +180,3 @@ The intent is for this core to be a 1:1 playable implementation of the Mega Syst
 |Player 1|Player 2|
 |--|--|
 |<table> <tr><th>Functions</th><th>Keymap</th></tr><tr><td>P1 Up</td><td>Up</td></tr><tr><td>P1 Down</td><td>Down</td></tr><tr><td>P1 Left</td><td>Left</td></tr><tr><td>P1 Right</td><td>Right</td></tr><tr><td>P1 Bttn 1</td><td>L-Ctrl</td></tr><tr><td>P1 Bttn 2</td><td>L-Alt</td></tr><tr><td>P1 Bttn 3</td><td>Space</td></tr><tr><td>P1 Bttn 4</td><td>L-Shift</td></tr> </table> | <table> <tr><th>Functions</th><th>Keymap</th></tr><tr><td>P2 Up</td><td>R</td></tr><tr><td>P2 Down</td><td>F</td></tr><tr><td>P2 Left</td><td>D</td></tr><tr><td>P2 Right</td><td>G</td></tr><tr><td>P2 Bttn 1</td><td>A</td></tr><tr><td>P2 Bttn 2</td><td>S</td></tr><tr><td>P2 Bttn 3</td><td>Q</td></tr><tr><td>P2 Bttn 4</td><td>W</td></tr> </table>|
-
