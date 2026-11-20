@@ -41,7 +41,7 @@ This version of the core appends `[MD]` to the end of MRA names so that it can l
 | [**Save states**](https://github.com/MiSTer-devel/Arcade-TaitoF2_MiSTer) | DDRAM state streamer, state bus, save/load UI | Martin Donlon (wickerwaka) | `rtl/savestate`, MiSTer-devel/Arcade-TaitoF2_MiSTer @ 9438df9 (unmodified) | GPL-2.0 |
 | [**mem**](https://github.com/MiSTer-devel/Arcade-Rygar_MiSTer/tree/master/src/mem) | SDRAM Controller / Rom Downloader | Josh Bassett, modified by Erin Olafson | `rtl/mem` | MIT |
 | [**Pause**](https://github.com/JimmyStones/Pause_MiSTer) | OSD / button pause and dim | Jim Gregory, modified by Erin Olafson | `rtl/pause.v` | GPL-3.0 |
-| [**core_template**](https://github.com/MiSTer-devel/Template_MiSTer) | MiSTer Framework Template (incl. yc_out by Mike Simone) | sorgelig and contributors | `sys/`, MiSTer-devel/Template_MiSTer @ e901a9f (unmodified) | GPL-3.0 |
+| [**core_template**](https://github.com/MiSTer-devel/Template_MiSTer) | MiSTer Framework Template (incl. yc_out by Mike Simone) | sorgelig and contributors | `sys/`, MiSTer-devel/Template_MiSTer @ d6324f2 (unmodified) | GPL-3.0 |
 
 High-score data comes from MAME's `plugins/hiscore/hiscore.dat` (MAME 0.288); ROM layouts and DIP switches from MAME
 0.288 `-listxml` and, where they exist, the games' Jaleco DIP sheets.
