@@ -995,7 +995,8 @@ reg fx68p_phi1;
 
 // fx68k requires twice the operating clock to generate phi phases
 always @(posedge clk_sys) begin
-    if ( clk_cpu_p == 1 ) begin
+    // phase advances only on a main CPU enable
+    if ( ce_cpu_p ) begin
         fx68p_phi1 <= ~fx68p_phi1;
     end
 end
