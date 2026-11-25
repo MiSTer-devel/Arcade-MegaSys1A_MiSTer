@@ -87,7 +87,7 @@ localparam CONF_STR = {
     "P1O89,Aspect Ratio,Original,Full Screen,[ARC1],[ARC2];",
     "h1P1O3,Orientation,Vert,Horz;",
     "P1-;",
-    "P1O46,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%,CRT 100%;",
+    "P1O46,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
     "P1OA,Force Scandoubler,Off,On;",
     "P1-;",
     "P1OJ,Refresh Rate,Native,NTSC;",
@@ -179,7 +179,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .ps2_key(ps2_key),
     .status(status),
     .status_in(status_in),
-    .status_set(ss_status_set),
+    .status_set(ss_status_set | ss_inc_set),
     .status_menumask({13'd0, hs_enabled, vertical_game, direct_video}),
     .info_req(info_req),
     .info(info_index),
@@ -420,7 +420,8 @@ end
 wire pll_locked;
 
 // Save-state controls: halts per clock domain, CPU interrupt/override/reset, YM2151 replay, RAM port takeover.
-wire         ss_halt_p, ss_halt_s, ss_halt_snd, ss_halt_vid, ss_exec_p, ss_rst_p, ss_rst_s, ss_oki_rst, ss_active;
+wire         ss_halt_p, ss_halt_s, ss_halt_snd, ss_halt_vid, ss_exec_p, ss_exec_s, ss_rst_p, ss_rst_s, ss_oki_rst, ss_active;
+wire         ss_lock, ss_bad, ss_dry, ss_hdr_abort, ss_save_ok, ss_hdr_done, ss_hdr_ok, ss_chunks_ok, ss_wrote_any;
 wire         ss_irq_p, ss_irq_s, ss_ovr_p, ss_ovr_s, ss_hit_p, ss_hit_s;
 wire  [15:0] ss_hit_data_p, ss_hit_data_s;
 wire         ss_opm_replay, ss_opm_busy, ss_ym_wr, ss_ym_a0, ss_opm_ic;
@@ -429,7 +430,9 @@ wire         ss_opm_hold = ss_halt_snd & ~ss_opm_busy;
 wire         ss_load, ss_save, ss_status_set, info_req;
 wire   [1:0] ss_slot;
 wire   [7:0] info_index;
-wire [127:0] status_in = { status[127:67], ss_slot, status[64:0] };
+reg          ss_inc_set = 0;
+reg    [1:0] ss_inc_slot = 0;
+wire [127:0] status_in = { status[127:67], ss_inc_set ? ss_inc_slot : ss_slot, status[64:0] };
 
 wire         ss_mram_sel, ss_sram_sel, ss_spr_sel, ss_scr0_sel, ss_scr1_sel, ss_scr2_sel, ss_pal_sel, ss_fb_sel;
 wire         ss_mram_we, ss_sram_we, ss_spr_we, ss_scr0_we, ss_scr1_we, ss_scr2_we, ss_pal_we, ss_fb_we;
@@ -475,11 +478,11 @@ reg  [7:0] clk4_count;
 reg  [7:0] clk1_75_count;
 
 always @ (posedge clk_sys) begin
-    if ( !ss_halt_snd ) begin
+    if ( !ss_halt_snd && !pause_cpu ) begin
         clk_4M <= ( clk4_count == 0 );
         if ( clk4_count == 17 ) begin
             clk4_count <= 0;
-        end else if ( pause_cpu == 0 ) begin
+        end else begin
             clk4_count <= clk4_count + 1;
         end
     end
@@ -514,7 +517,7 @@ always @ (posedge clk_sys) begin
     // 14MHz
     // M = 7 / N = 36
     clk_cpu_s <= 0;
-    if ( !ss_halt_s ) begin
+    if ( !ss_halt_s && ( !pause_cpu || ss_exec_s ) ) begin
         if ( clk_cpu_count > 35 ) begin
             clk_cpu_s <= 1;
             clk_cpu_count <= clk_cpu_count - 29;
@@ -523,11 +526,11 @@ always @ (posedge clk_sys) begin
         end
     end
 
-    if ( !ss_opm_hold ) begin
+    if ( !ss_opm_hold && ( !pause_cpu || ss_opm_busy ) ) begin
         clk_3_5M <= ( clk1_75_count == 0 || clk1_75_count == 20 );
         if ( clk1_75_count == 39 ) begin  // 1.8
             clk1_75_count <= 0;
-        end else if ( pause_cpu == 0 || ss_opm_busy ) begin
+        end else begin
             clk1_75_count <= clk1_75_count + 1;
         end
     end
@@ -535,20 +538,36 @@ end
 
 // Clock enables, high in the cycle before clk_cpu_p, clk_cpu_s and clk_6M rise.
 wire ce_cpu_p = ( clk12_count == 0 ) & ~clk_cpu_p & ~ss_halt_p;
-wire ce_cpu_s = ( clk_cpu_count > 35 ) & ~clk_cpu_s & ~ss_halt_s;
+wire ce_cpu_s = ( clk_cpu_count > 35 ) & ~clk_cpu_s & ~ss_halt_s & ( ~pause_cpu | ss_exec_s );
 wire ce_6m    = ( clk6_count == 0 ) & ~clk_6M;
 
-// Sound chip enables, held while a save state freezes the sound section.
-wire oki_cen = clk_4M & ~ss_halt_snd;
-wire opm_cen = clk_3_5M & ~ss_opm_hold;
+// Sound chip enables, held while a save state freezes the sound section or the game is paused.
+wire oki_cen = clk_4M & ~ss_halt_snd & ~pause_cpu;
+wire opm_cen = clk_3_5M & ~ss_opm_hold & ( ~pause_cpu | ss_opm_busy );
 
 // High-score engine uses the main RAM / scroll 2 RAM port in cycles without a main CPU access.
 assign hs_go   = hs_mem_req & ~ce_cpu_p & ~ss_active;
 assign hs_mram = hs_go & ( hs_mem_addr[19:16] == 4'hf );
 assign hs_scr2 = hs_go & ( hs_mem_addr[19:14] == 6'b1001_10 );
 
-wire    reset;
-assign  reset = RESET | key_reset | status[0];
+// Core reset waits while a save/restore stream runs (at most ~58 ms), then is held for 8191 cycles.
+wire        reset_req = RESET | key_reset | status[0];
+reg         rst_pend  = 0;
+reg  [21:0] rst_wait  = 0;
+reg  [12:0] rst_hold  = 0;
+wire        rst_force = &rst_wait;
+wire        reset     = ( reset_req & ~ss_lock ) | ( rst_hold != 0 ) | rst_force;
+
+always @(posedge clk_sys) begin
+    if ( reset_req & ss_lock ) rst_pend <= 1;
+    rst_wait <= ( rst_pend & ss_lock & ~rst_force ) ? rst_wait + 1'd1 : 22'd0;
+    if ( ( rst_pend & ~ss_lock ) | ss_bad ) begin
+        rst_hold <= 13'h1fff;
+        rst_pend <= 0;
+    end else if ( rst_hold != 0 ) begin
+        rst_hold <= rst_hold - 1'd1;
+    end
+end
 
 //////////////////////////////////////////////////////////////////
 // Plus Alpha is ROT270: rotate counter-clockwise for an upright picture.
@@ -613,7 +632,7 @@ video_timing video_timing (
 
 // PAUSE SYSTEM
 wire    pause_cpu;
-wire    hs_pause;
+wire    hs_pause = 1'b0;
 
 // 8 bits per colour, 72MHz sys clk
 pause #(8,8,8,72) pause
@@ -988,8 +1007,10 @@ wire [15:0] m68kp_dout;
 // CPU inputs
 reg  [15:0] m68kp_din;
 
-reg  m68kp_vpa_n;
-reg  m68kp_dtack_n;
+// No wait states (the program cache refill finishes inside the bus cycle) and autovectored interrupts.
+wire m68kp_vpa_n   = 1'b0;
+wire m68kp_dtack_n = 1'b0;
+assign m68kp_a[0]  = 1'b0;
 
 reg fx68p_phi1;
 
@@ -1058,7 +1079,8 @@ wire [15:0] m68ks_dout;
 // CPU inputs
 reg  [15:0] m68ks_din;
 reg  sound_cpu_reset;
-reg  m68ks_vpa_n;
+wire m68ks_vpa_n   = 1'b0;
+assign m68ks_a[0]  = 1'b0;
 
 
 //wire m68ks_dtack_n = m68ks_rom_cs ? !m68ks_rom_valid : 0;
@@ -1385,7 +1407,7 @@ always @ (posedge clk_sys) begin
         
         if ( clk_cpu_s == 1 ) begin
         
-            if ( m68kp_as_n == 1 ) begin
+            if ( m68ks_as_n == 1 ) begin
                 write_done_s <= 0;
             end
 
@@ -1838,6 +1860,7 @@ end
 always @ (posedge clk_sys) begin
     if ( reset == 1 ) begin
         scroll_state <= 0;
+        sprite_state <= 0;
         sprite_overrun <= 0;
         sprite_rom_cs <= 0;
         scroll_size <= 0;
@@ -1885,8 +1908,8 @@ always @ (posedge clk_sys) begin
                             // 8x8
                             4: scroll0_addr_r <= {                  scroll0_x[10:3], scroll0_y[7:3] };  //[1][0] 2048x256
                             5: scroll0_addr_r <= { scroll0_y[8],    scroll0_x[ 9:3], scroll0_y[7:3] };  //[1][1] 1024x512
-                            6: scroll0_addr_r <= { scroll0_y[8],    scroll0_x[ 8:3], scroll0_y[7:3] };  //[1][2] 1024x512
-                            7: scroll0_addr_r <= { scroll0_y[9:8],  scroll0_x[ 7:3], scroll0_y[7:3] };  //[1][3] 512x1024
+                            6: scroll0_addr_r <= { scroll0_y[8],    scroll0_x[ 9:3], scroll0_y[7:3] };  //[1][2] 1024x512
+                            7: scroll0_addr_r <= { scroll0_y[9:8],  scroll0_x[ 8:3], scroll0_y[7:3] };  //[1][3] 512x1024
                         endcase
                     end
                     1: begin
@@ -1900,8 +1923,8 @@ always @ (posedge clk_sys) begin
                             // 8x8
                             4: scroll1_addr_r <= {                  scroll1_x[10:3], scroll1_y[7:3] };
                             5: scroll1_addr_r <= { scroll1_y[8],    scroll1_x[ 9:3], scroll1_y[7:3] };
-                            6: scroll1_addr_r <= { scroll1_y[8],    scroll1_x[ 8:3], scroll1_y[7:3] };
-                            7: scroll1_addr_r <= { scroll1_y[9:8],  scroll1_x[ 7:3], scroll1_y[7:3] };
+                            6: scroll1_addr_r <= { scroll1_y[8],    scroll1_x[ 9:3], scroll1_y[7:3] };
+                            7: scroll1_addr_r <= { scroll1_y[9:8],  scroll1_x[ 8:3], scroll1_y[7:3] };
                         endcase
                     end
                     2: begin
@@ -1956,7 +1979,6 @@ always @ (posedge clk_sys) begin
                         scroll0_rom_addr <= { scroll_tile[16:2], scroll_tile[0], scroll0_y[2:0] };
                         scroll_x_ofs <= { scroll_tile[1], 3'b0 };
                     end
-                    scroll_x_ofs <= 0 ;
                     scroll_size <= !m68kp_scr0_reg_mode[4];
                     scroll0_rom_cs <= 1;
                 end
@@ -2257,9 +2279,10 @@ always @ (posedge clk_sys) begin
                 layer_enable[3] == 1 &&
                 // not transparent
                 framebuf_dout[3:0] != 15 &&
-                // sprite layer > tile layer 
+                // no opaque tile pixel here (empty-line marker), or sprite layer > tile layer
                 // when split, bit [3] of the sprite colour controls hi/low priority
-                ( ( sprite_control[8] == 0 || framebuf_dout[7] == 0 ) ? sprite_priority_hi : sprite_priority_lo ) > ( 3'h4 - line_buf_dout[12:10] )
+                ( line_buf_dout[15] ||
+                  ( ( sprite_control[8] == 0 || framebuf_dout[7] == 0 ) ? sprite_priority_hi : sprite_priority_lo ) > ( 3'h4 - line_buf_dout[12:10] ) )
                ) begin
                     // framebuf_dout[7] priority when split
                 if ( sprite_control[8] == 0 ) begin
@@ -2526,13 +2549,21 @@ dual_port_ram #(.LEN(1024), .DATA_WIDTH(16)) palette_ram
 
 // SAVE STATES
 
-ssbus_if ssbus();
+ssbus_if ssbus(), ssbus_g();
 ssbus_if ssb[SSIDX_COUNT]();
+
+megasys1_ss_dry #(.KEEP(SSIDX_GLOBAL)) ss_dry_gate
+(
+    .clk(clk_sys),
+    .dry(ss_dry),
+    .up(ssbus),
+    .dn(ssbus_g)
+);
 
 ssbus_mux #(.COUNT(SSIDX_COUNT)) ssmux
 (
     .clk(clk_sys),
-    .slave(ssbus),
+    .slave(ssbus_g),
     .masters(ssb)
 );
 
@@ -2576,6 +2607,7 @@ megasys1_ss_ctrl ss_ctrl
     .halt_snd(ss_halt_snd),
     .halt_vid(ss_halt_vid),
     .exec_p(ss_exec_p),
+    .exec_s(ss_exec_s),
     .rst_p(ss_rst_p),
     .rst_s(ss_rst_s),
     .oki_rst(ss_oki_rst),
@@ -2584,6 +2616,15 @@ megasys1_ss_ctrl ss_ctrl
     .ss_write(ss_write),
     .ss_read(ss_read),
     .ss_busy(ss_busy),
+    .hdr_done(ss_hdr_done),
+    .hdr_ok(ss_hdr_ok),
+    .chunks_ok(ss_chunks_ok),
+    .wrote_any(ss_wrote_any),
+    .hdr_abort(ss_hdr_abort),
+    .save_ok(ss_save_ok),
+    .lock(ss_lock),
+    .bad(ss_bad),
+    .dry(ss_dry),
     .active(ss_active),
     .ssbus(ssb[SSIDX_GLOBAL])
 );
@@ -2727,7 +2768,7 @@ ddr_if ddr_host(), ddr_ss(), ddr_rot();
 save_state_data save_state_data
 (
     .clk(clk_sys),
-    .reset(1'b0),
+    .reset(reset | ss_hdr_abort),
     .ddr(ddr_ss),
     .read_start(ss_read),
     .write_start(ss_write),
@@ -2746,12 +2787,30 @@ megasys1_rotate_ddr rotate_ddr
     .ddr(ddr_rot)
 );
 
-ddr_mux ddr_mux
+megasys1_ddr_arb ddr_arb
 (
     .clk(clk_sys),
+    .clr(reset | ss_hdr_abort),
     .x(ddr_host),
     .a(ddr_ss),
     .b(ddr_rot)
+);
+
+megasys1_ss_check #(.COUNT(SSIDX_COUNT)) ss_check
+(
+    .clk(clk_sys),
+    .start(ss_read),
+    .rd_valid(ddr_ss.rdata_ready),
+    .rd_data(ddr_ss.rdata),
+    .sel(ssbus.select),
+    .write(ssbus.write),
+    .query(ssbus.query),
+    .ack(ssbus.ack),
+    .ack_data(ssbus.data_out),
+    .hdr_done(ss_hdr_done),
+    .hdr_ok(ss_hdr_ok),
+    .chunks_ok(ss_chunks_ok),
+    .wrote_any(ss_wrote_any)
 );
 
 assign DDRAM_CLK      = clk_sys;
@@ -2765,13 +2824,20 @@ assign ddr_host.rdata       = DDRAM_DOUT;
 assign ddr_host.rdata_ready = DDRAM_DOUT_READY;
 assign ddr_host.busy        = DDRAM_BUSY;
 
-// Keyboard save states on F1 / Alt-F1 only: F2 and F3 stay test and reset.
-wire ss_key = ( ps2_key[7:0] == 8'h05 ) | ( ps2_key[7:0] == 8'h11 );
+// Keyboard save states on F1 / Alt-F1, passed on as the key of the selected slot; F3 stays reset.
+wire [7:0] ss_fkey = ( ss_slot == 2'd0 ) ? 8'h05 : ( ss_slot == 2'd1 ) ? 8'h06 : ( ss_slot == 2'd2 ) ? 8'h04 : 8'h0C;
+wire [7:0] ss_key  = ( ps2_key[7:0] == 8'h05 ) ? ss_fkey : ( ps2_key[7:0] == 8'h11 ) ? 8'h11 : 8'h00;
+
+// Autoincrement: the OSD slot moves on only after a save has been written.
+always @(posedge clk_sys) begin
+    ss_inc_set <= ss_save_ok & status[64];
+    if ( ss_save_ok ) ss_inc_slot <= ss_index + 1'd1;
+end
 
 savestate_ui #(.INFO_TIMEOUT_BITS(25)) savestate_ui
 (
     .clk(clk_sys),
-    .ps2_key({ ps2_key[10:8], ss_key ? ps2_key[7:0] : 8'h00 }),
+    .ps2_key({ ps2_key[10:8], ss_key }),
     .allow_ss(1'b1),
     .joySS(joy0[10]),
     .joyRight(joy0[0]),
@@ -2782,7 +2848,7 @@ savestate_ui #(.INFO_TIMEOUT_BITS(25)) savestate_ui
     .joyRewind(1'b0),
     .rewindEnable(1'b0),
     .status_slot(status[66:65]),
-    .autoincslot(status[64]),
+    .autoincslot(1'b0),
     .OSD_saveload(status[68:67]),
     .ss_save(ss_save),
     .ss_load(ss_load),

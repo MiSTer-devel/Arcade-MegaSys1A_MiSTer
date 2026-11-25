@@ -122,6 +122,7 @@ module megasys1_ss_ctrl (
     output reg        halt_snd,
     output reg        halt_vid,
     output reg        exec_p,
+    output reg        exec_s,
     output reg        rst_p,
     output reg        rst_s,
     output reg        oki_rst,
@@ -133,6 +134,16 @@ module megasys1_ss_ctrl (
     output reg        ss_read,
     input             ss_busy,
 
+    input             hdr_done,
+    input             hdr_ok,
+    input             chunks_ok,
+    input             wrote_any,
+    output reg        hdr_abort,
+    output reg        save_ok,
+    output            lock,
+    output            bad,
+    output            dry,
+
     output            active,
 
     ssbus_if.slave    ssbus
@@ -140,9 +151,9 @@ module megasys1_ss_ctrl (
 
 localparam [15:0] MAGIC = 16'h4d31;
 
-typedef enum logic [3:0] {
+typedef enum logic [4:0] {
     IDLE, S_WAIT_R, S_PARK, S_STREAM, S_STREAM_WAIT, S_RESUME, S_EXIT,
-    R_WAIT_R, R_STREAM, R_STREAM_WAIT, R_OPM, R_OPM_WAIT, R_RESET, R_RUN, R_RESUME
+    R_WAIT_R, R_HDR, R_DRY, R_WAIT_R2, R_STREAM, R_STREAM_WAIT, R_OPM, R_OPM_WAIT, R_RESET, R_RUN, R_RESUME, R_BAD
 } state_t;
 
 state_t     st = IDLE;
@@ -157,7 +168,17 @@ reg  [15:0] rd;
 wire at_r  = sprite_idle && !vbl && vc < 9'd208;
 wire at_rf = vc == rf_vc && hc == rf_hc && c6 == rf_c6;
 
+// saved raster point reachable; stack pointers even, in work RAM (A19-A0 decode), with room for the 70 bytes the restart code pops
+wire ssp_ok_p = !ssp_in_p[0] && ssp_in_p[19:16] == 4'hf && ssp_in_p[15:0] <= 16'hffba;
+wire ssp_ok_s = s_skip || ( !ssp_in_s[0] && ssp_in_s[19:17] == 3'h7 && ssp_in_s[16:0] <= 17'h1ffba );
+wire glob_ok  = magic_ok && rf_vc <= 9'd262 && rf_hc <= 9'd383 && rf_c6 <= 8'd11 && ssp_ok_p && ssp_ok_s;
+
 assign active = ( st != IDLE );
+// a stream is moving state between DDR and the machine: a core reset waits for it
+assign lock   = ( st == S_STREAM ) || ( st == S_STREAM_WAIT ) || ( st == R_STREAM ) || ( st == R_STREAM_WAIT );
+assign bad    = ( st == R_BAD );
+// check pass: the slot is streamed with writes to the machine held back
+assign dry    = ( st == R_HDR ) || ( st == R_DRY );
 
 always @* begin
     halt_p   = 0;
@@ -165,6 +186,7 @@ always @* begin
     halt_snd = 0;
     halt_vid = 0;
     exec_p   = 0;
+    exec_s   = 0;
     rst_p    = 0;
     rst_s    = 0;
     oki_rst  = 0;
@@ -173,13 +195,14 @@ always @* begin
             halt_p = parked_p;
             halt_s = parked_s | s_skip;
             exec_p = ~parked_p;
+            exec_s = ~parked_s & ~s_skip;
         end
-        S_STREAM, S_STREAM_WAIT, S_RESUME, R_STREAM, R_STREAM_WAIT, R_OPM, R_OPM_WAIT, R_RESUME: begin
+        S_STREAM, S_STREAM_WAIT, S_RESUME, R_STREAM, R_STREAM_WAIT, R_OPM, R_OPM_WAIT, R_RESUME, R_BAD: begin
             halt_p   = 1;
             halt_s   = 1;
             halt_snd = 1;
             halt_vid = 1;
-            oki_rst  = ( st == R_STREAM_WAIT );
+            oki_rst  = ( st == R_OPM ) || ( st == R_OPM_WAIT );
         end
         R_RESET: begin
             halt_snd = 1;
@@ -187,6 +210,7 @@ always @* begin
             rst_p    = 1;
             rst_s    = ~s_skip;
             exec_p   = 1;
+            exec_s   = ~s_skip;
         end
         R_RUN: begin
             halt_p   = parked_p;
@@ -194,9 +218,11 @@ always @* begin
             halt_snd = 1;
             halt_vid = 1;
             exec_p   = ~parked_p;
+            exec_s   = ~parked_s & ~s_skip;
         end
         S_EXIT: begin
             exec_p = ovr_p;
+            exec_s = ovr_s;
         end
         default: ;
     endcase
@@ -226,6 +252,8 @@ always @(posedge clk) begin
     opm_replay      <= 0;
     ss_write        <= 0;
     ss_read         <= 0;
+    hdr_abort       <= 0;
+    save_ok         <= 0;
 
     // global chunk: stack pointers, raster point, sound CPU reset flag, layout tag
     ssbus.setup(SSIDX_GLOBAL, 32'd9, 1);
@@ -283,7 +311,7 @@ always @(posedge clk) begin
             end
 
             S_STREAM:      if ( ss_busy )  st <= S_STREAM_WAIT;
-            S_STREAM_WAIT: if ( !ss_busy ) st <= S_RESUME;
+            S_STREAM_WAIT: if ( !ss_busy ) begin save_ok <= 1; st <= S_RESUME; end
             S_RESUME:      if ( at_rf ) begin timer <= 0; st <= S_EXIT; end
 
             S_EXIT: begin
@@ -299,19 +327,56 @@ always @(posedge clk) begin
             R_WAIT_R: if ( at_r ) begin
                 magic_ok <= 0;
                 ss_read  <= 1;
+                timer    <= 0;
+                st       <= R_HDR;
+            end
+
+            // check pass, nothing halted: header length, then every chunk whole and the global values in range
+            R_HDR: begin
+                timer <= timer + 1'd1;
+                if ( hdr_done && hdr_ok ) begin
+                    timer <= 0;
+                    st    <= R_DRY;
+                end else if ( hdr_done || &timer ) begin
+                    hdr_abort <= 1;
+                    timer     <= 0;
+                    st        <= S_EXIT;
+                end
+            end
+
+            R_DRY: begin
+                timer <= timer + 1'd1;
+                if ( !ss_busy && chunks_ok && glob_ok ) begin
+                    st <= R_WAIT_R2;
+                end else if ( !ss_busy || &timer ) begin
+                    hdr_abort <= 1;
+                    timer     <= 0;
+                    st        <= S_EXIT;
+                end
+            end
+
+            R_WAIT_R2: if ( at_r ) begin
+                magic_ok <= 0;
+                ss_read  <= 1;
                 st       <= R_STREAM;
             end
 
-            R_STREAM:      if ( ss_busy ) st <= R_STREAM_WAIT;
+            R_STREAM: if ( ss_busy ) st <= R_STREAM_WAIT;
+
+            // every chunk must arrive whole, or the partly loaded machine is reset instead of resumed
             R_STREAM_WAIT: if ( !ss_busy ) begin
-                if ( magic_ok ) begin
+                if ( magic_ok && chunks_ok ) begin
                     opm_replay <= 1;
                     st         <= R_OPM;
-                end else begin
+                end else if ( !wrote_any ) begin
                     timer <= 0;
                     st    <= S_EXIT;
+                end else begin
+                    st    <= R_BAD;
                 end
             end
+
+            R_BAD: ;
 
             R_OPM:      if ( opm_busy ) st <= R_OPM_WAIT;
             R_OPM_WAIT: if ( !opm_busy ) begin
@@ -333,14 +398,23 @@ always @(posedge clk) begin
             R_RUN: begin
                 timer <= timer + 1'd1;
                 if ( parked_p && ( parked_s || s_skip ) ) begin
-                    st <= R_RESUME;
+                    timer <= 0;
+                    st    <= R_RESUME;
                 end else if ( &timer ) begin
                     timer <= 0;
                     st    <= S_EXIT;
                 end
             end
 
-            R_RESUME: if ( at_rf ) begin timer <= 0; st <= S_EXIT; end
+            R_RESUME: begin
+                timer <= timer + 1'd1;
+                if ( at_rf ) begin
+                    timer <= 0;
+                    st    <= S_EXIT;
+                end else if ( &timer ) begin
+                    st    <= R_BAD;
+                end
+            end
 
             default: st <= IDLE;
         endcase
@@ -477,14 +551,14 @@ always @(posedge clk) begin
     end
 end
 
-// replay: chip reset, then written registers 0x20-0xff, globals, timers and 0x14, AMD, PMD, key-on per channel, address latch
+// replay: chip reset, then written registers 0x20-0xff, globals, timers, AMD, PMD, key-on per channel, 0x14, address latch
 reg  [7:0] step;
 reg  [7:0] s_reg;
 reg        s_ram;
 reg  [7:0] s_fixed;
 reg        s_valid;
 reg        s_addr_only;
-wire [7:0] s_ch = step - 8'd234;
+wire [7:0] s_ch = step - 8'd233;
 
 always @* begin
     s_ram       = 1;
@@ -493,30 +567,32 @@ always @* begin
     s_reg       = 8'h00;
     if ( step < 8'd224 ) begin
         s_reg = 8'h20 + step;
-    end else if ( step < 8'd232 ) begin
-        case ( step[2:0] )
-            3'd0: s_reg = 8'h01;
-            3'd1: s_reg = 8'h0f;
-            3'd2: s_reg = 8'h18;
-            3'd3: s_reg = 8'h1b;
-            3'd4: s_reg = 8'h10;
-            3'd5: s_reg = 8'h11;
-            3'd6: s_reg = 8'h12;
-            3'd7: s_reg = 8'h14;
+    end else if ( step < 8'd231 ) begin
+        case ( step - 8'd224 )
+            8'd0:    s_reg = 8'h01;
+            8'd1:    s_reg = 8'h0f;
+            8'd2:    s_reg = 8'h18;
+            8'd3:    s_reg = 8'h1b;
+            8'd4:    s_reg = 8'h10;
+            8'd5:    s_reg = 8'h11;
+            default: s_reg = 8'h12;
         endcase
-    end else if ( step < 8'd234 ) begin
+    end else if ( step < 8'd233 ) begin
         s_reg   = 8'h19;
         s_ram   = 0;
-        s_fixed = ( step == 8'd232 ) ? { 1'b0, amd } : { 1'b1, pmd };
-    end else if ( step < 8'd242 ) begin
+        s_fixed = ( step == 8'd231 ) ? { 1'b0, amd } : { 1'b1, pmd };
+    end else if ( step < 8'd241 ) begin
         s_reg   = 8'h08;
         s_ram   = 0;
         s_fixed = { 1'b0, keyon[ { s_ch[2:0], 2'b00 } +: 4 ], s_ch[2:0] };
+    end else if ( step == 8'd241 ) begin
+        // timer control last, so the timers restart as close to the resume as possible
+        s_reg = 8'h14;
     end else begin
         s_reg       = cur_addr;
         s_addr_only = 1;
     end
-    s_valid = ( step < 8'd234 ) ? valid[s_reg] : 1'b1;
+    s_valid = ( ( step >= 8'd233 && step < 8'd241 ) || step > 8'd241 ) ? 1'b1 : valid[s_reg];
 end
 
 typedef enum logic [3:0] { P_IDLE, P_IC, P_IC_GAP, P_PREP, P_READ, P_DATA, P_AW, P_AW_GAP, P_DW, P_DW_WAIT } pstate_t;
@@ -662,5 +738,148 @@ always @(posedge clk) begin
               end
     endcase
 end
+
+endmodule
+
+
+// DDRAM arbiter: save-state stream (a) and rotation FIFO (b) alternate, one posted request at a time.
+module megasys1_ddr_arb (
+    input            clk,
+    input            clr,
+    ddr_if.to_host   x,
+    ddr_if.from_host a,
+    ddr_if.from_host b
+);
+
+reg        pend   = 0;
+reg        last_b = 0;
+reg        p_rd, p_wr;
+reg [31:0] p_addr;
+reg [63:0] p_wdata;
+reg  [7:0] p_be, p_burst;
+reg  [1:0] outst  = 0;
+reg  [1:0] drop   = 0;
+
+wire a_req   = a.read | a.write;
+wire b_req   = b.read | b.write;
+wire grant_b = !pend & b_req & ( !a_req | !last_b );
+wire grant_a = !pend & a_req & !grant_b;
+wire accept  = pend & !x.busy;
+wire rd_acc  = accept & p_rd;
+wire [1:0] outst_next = outst + rd_acc - x.rdata_ready;
+
+assign a.busy        = a_req & !grant_a;
+assign b.busy        = b_req & !grant_b;
+assign a.rdata       = x.rdata;
+assign b.rdata       = x.rdata;
+assign a.rdata_ready = x.rdata_ready & ( drop == 0 );
+assign b.rdata_ready = 0;
+
+assign x.read       = pend & p_rd;
+assign x.write      = pend & p_wr;
+assign x.addr       = p_addr;
+assign x.wdata      = p_wdata;
+assign x.byteenable = p_be;
+assign x.burstcnt   = p_burst;
+assign x.acquire    = a.acquire | b.acquire;
+
+always @(posedge clk) begin
+    outst <= outst_next;
+    if ( clr )                                drop <= outst_next;
+    else if ( x.rdata_ready && drop != 0 )    drop <= drop - 1'd1;
+
+    if ( grant_a | grant_b ) begin
+        pend    <= 1;
+        last_b  <= grant_b;
+        p_rd    <= grant_b ? b.read       : a.read;
+        p_wr    <= grant_b ? b.write      : a.write;
+        p_addr  <= grant_b ? b.addr       : a.addr;
+        p_wdata <= grant_b ? b.wdata      : a.wdata;
+        p_be    <= grant_b ? b.byteenable : a.byteenable;
+        p_burst <= grant_b ? b.burstcnt   : a.burstcnt;
+    end else if ( accept ) begin
+        pend    <= 0;
+    end
+end
+
+endmodule
+
+
+// Restore checks: header length against this layout, and per chunk words written against the queried count.
+module megasys1_ss_check #(parameter COUNT = 12, parameter [29:0] WORDS = 30'd80586) (
+    input             clk,
+    input             start,
+    input             rd_valid,
+    input      [63:0] rd_data,
+    input       [7:0] sel,
+    input             write,
+    input             query,
+    input             ack,
+    input      [63:0] ack_data,
+    output reg        hdr_done,
+    output reg        hdr_ok,
+    output            chunks_ok,
+    output reg        wrote_any
+);
+
+reg             first = 0;
+reg  [31:0]     exp_cnt [0:COUNT-1];
+reg  [31:0]     got_cnt [0:COUNT-1];
+reg [COUNT-1:0] seen;
+reg [COUNT-1:0] match;
+integer         i;
+
+always @* for ( i = 0; i < COUNT; i = i + 1 ) match[i] = seen[i] && ( got_cnt[i] == exp_cnt[i] );
+assign chunks_ok = &match;
+
+always @(posedge clk) begin
+    if ( start ) begin
+        first     <= 1;
+        hdr_done  <= 0;
+        hdr_ok    <= 0;
+        wrote_any <= 0;
+        seen      <= 0;
+        for ( i = 0; i < COUNT; i = i + 1 ) got_cnt[i] <= 0;
+    end else begin
+        if ( first && rd_valid ) begin
+            first    <= 0;
+            hdr_done <= 1;
+            hdr_ok   <= ( rd_data[61:32] == WORDS );
+        end
+        if ( ack && query && sel < COUNT ) begin
+            exp_cnt[sel] <= ack_data[31:0];
+            seen[sel]    <= 1;
+        end
+        if ( ack && write && !query && sel < COUNT ) begin
+            got_cnt[sel] <= got_cnt[sel] + 1'd1;
+            wrote_any    <= 1;
+        end
+    end
+end
+
+endmodule
+
+
+// Check pass gate: while dry, writes to the blocks (except the global chunk) are held back and acknowledged here.
+module megasys1_ss_dry #(parameter [7:0] KEEP = 8'd0) (
+    input              clk,
+    input              dry,
+    ssbus_if.slave     up,
+    ssbus_if.master    dn
+);
+
+reg  fake = 0;
+wire hold = dry & up.write & ~up.query & ( up.select != KEEP );
+
+assign dn.data     = up.data;
+assign dn.addr     = up.addr;
+assign dn.select   = up.select;
+assign dn.read     = up.read;
+assign dn.query    = up.query;
+assign dn.write    = up.write & ~hold;
+assign up.data_out = dn.data_out;
+assign up.ack      = dn.ack | fake;
+
+always @(posedge clk) fake <= hold & ~fake;
 
 endmodule

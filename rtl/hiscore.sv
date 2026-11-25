@@ -40,6 +40,8 @@ reg   [4:0] n_entries = 0;
 reg   [7:0] nvbuf [0:1023];
 reg   [7:0] nv_q;
 reg         nv_loaded = 0;
+reg         nv_nonzero = 0;
+reg         nv_saved = 0;
 reg   [9:0] ni;
 reg   [7:0] rd_byte;
 reg   [4:0] ei;
@@ -48,7 +50,6 @@ state_t     st = S_IDLE;
 reg   [5:0] frames = 0;
 reg   [1:0] passes = 0;
 reg         restored = 0;
-reg         valid_seen = 0;
 reg         vbl_d = 0, osd_d = 0, save_d = 0;
 reg         ok;
 reg         save_pending = 0;
@@ -63,11 +64,17 @@ always @(posedge clk) begin
     end
 end
 
-always @(posedge clk) if (ioctl_download && ioctl_wr && ioctl_index == NV_INDEX) nv_loaded <= 1;
+// a downloaded table counts only if it holds data (an all-zero file is never restored)
+always @(posedge clk) if (ioctl_download && ioctl_wr && ioctl_index == NV_INDEX) begin
+    nv_loaded <= 1;
+    if (ioctl_dout != 8'h00) nv_nonzero <= 1;
+end
+wire        have_nv = (nv_loaded & nv_nonzero) | nv_saved;
+wire        saving  = (st == S_SAVE) || (st == S_SAVE_RD) || (st == S_UPLOAD);
 
 // saved table: one port shared by download, upload (ioctl address) and save/restore (ni)
-wire        save_wr = (st == S_SAVE_RD);
 wire        nv_io   = (ioctl_download | ioctl_upload) & (ioctl_index == NV_INDEX);
+wire        save_wr = (st == S_SAVE_RD) & ~nv_io;
 wire  [9:0] nv_addr = nv_io ? ioctl_addr[9:0] : ni;
 wire        nv_we   = (nv_io & ioctl_download & ioctl_wr) | save_wr;
 wire  [7:0] nv_din  = nv_io ? ioctl_dout : rd_byte;
@@ -98,11 +105,14 @@ always @(posedge clk) begin
 
     if ((osd_open & ~osd_d & autosave) | (save_now & ~save_d)) save_pending <= 1;
 
+    // a reset restarts the restore; a save already copying finishes first (the CPU is held, RAM does not change)
     if (reset) begin
-        st <= S_IDLE;
         frames <= 0;
         passes <= 0;
         restored <= 0;
+    end
+    if (reset && !saving) begin
+        st <= S_IDLE;
         mem_req <= 0;
     end else begin
         case (st)
@@ -110,7 +120,7 @@ always @(posedge clk) begin
 
         // wait 30 frames after reset, then check once per frame
         S_WAIT: begin
-            if (save_pending && valid_seen) begin
+            if (save_pending && restored) begin
                 save_pending <= 0;
                 ei <= 0; bi <= 0; ni <= 0;
                 st <= S_SAVE;
@@ -149,9 +159,8 @@ always @(posedge clk) begin
                 st <= S_CHECK_START;
             end else begin
                 if (ok) begin
-                    valid_seen <= 1;
                     if (passes == 1) begin
-                        if (nv_loaded) begin
+                        if (have_nv) begin
                             ei <= 0; bi <= 0; ni <= 0;
                             st <= S_RESTORE;
                         end else begin
@@ -207,7 +216,8 @@ always @(posedge clk) begin
             end
         end
 
-        S_SAVE_RD: begin
+        // the buffer write waits while the HPS is transferring the table
+        S_SAVE_RD: if (!nv_io) begin
             ni <= ni + 1'd1;
             if (bi + 1'd1 < e_len) begin
                 bi <= bi + 1'd1;
@@ -222,6 +232,7 @@ always @(posedge clk) begin
 
         S_UPLOAD: begin
             upload_req <= 1;
+            nv_saved <= 1;
             st <= S_WAIT;
         end
 

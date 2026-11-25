@@ -20,7 +20,6 @@ This version of the core appends `[MD]` to the end of MRA names so that it can l
 | **Hachoo!**                                                                                                 | MB8845               | Yes                  | Yes | **Implemented**              | **20240101** |
 | **In Your Face (Prototpe)**                                                                                 | W.I.P                | Yes                  | N/A | **Implemented**              | **20240101** |
 | **Jitsuryoku!! Pro Yakyuu**                                                                                 | MBMO2A               | Yes                  | Yes | **Implemented**              | **20240106** |
-| **Kick Off - Jaleco Cup**                                                                                   | MB8844               | N/A                  | N/A | **Implemented / Unverified** | **20261117** |
 | [**Ninja Kazan / Iga Ninjyutsuden**](https://en.wikipedia.org/wiki/Ninja_Kazan)                             | MB8845               | Yes                  | Yes | **Implemented**              | **20230923** |
 | [**P-47: The Freedom Fighter**](https://en.wikipedia.org/wiki/P-47:_The_Phantom_Fighter)                    | MB8844<br><br>MB8843 | N/A                  | N/A | **Implemented**              | **20230701** |
 | [**Phantasm**](https://en.wikipedia.org/wiki/Avenging_Spirit)                                               | MB8845               | Yes                  | N/A | **Implemented**              | **20230708** |
@@ -175,7 +174,7 @@ High-score data comes from MAME's `plugins/hiscore/hiscore.dat` (MAME 0.288); RO
 
 |Services|Coin/Start|
 |--|--|
-|<table> <tr><th>Functions</th><th>Keymap</th></tr><tr><td>Test</td><td>F2</td></tr><tr><td>Reset</td><td>F3</td></tr><tr><td>Service</td><td>9</td></tr><tr><td>Pause</td><td>P</td></tr> </table> | <table><tr><th>Functions</th><th>Keymap</th><tr><tr><td>P1 Start</td><td>1</td></tr><tr><td>P2 Start</td><td>2</td></tr><tr><td>P1 Coin</td><td>5</td></tr><tr><td>P2 Coin</td><td>6</td></tr> </table>|
+|<table> <tr><th>Functions</th><th>Keymap</th></tr><tr><td>Reset</td><td>F3</td></tr><tr><td>Load state (selected slot)</td><td>F1</td></tr><tr><td>Save state (selected slot)</td><td>Alt+F1</td></tr><tr><td>Service</td><td>9</td></tr><tr><td>Pause</td><td>P</td></tr> </table> | <table><tr><th>Functions</th><th>Keymap</th><tr><tr><td>P1 Start</td><td>1</td></tr><tr><td>P2 Start</td><td>2</td></tr><tr><td>P1 Coin</td><td>5</td></tr><tr><td>P2 Coin</td><td>6</td></tr> </table>|
 
 |Player 1|Player 2|
 |--|--|
