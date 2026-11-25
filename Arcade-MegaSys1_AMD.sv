@@ -423,7 +423,7 @@ wire pll_locked;
 wire         ss_halt_p, ss_halt_s, ss_halt_snd, ss_halt_vid, ss_exec_p, ss_rst_p, ss_rst_s, ss_oki_rst, ss_active;
 wire         ss_irq_p, ss_irq_s, ss_ovr_p, ss_ovr_s, ss_hit_p, ss_hit_s;
 wire  [15:0] ss_hit_data_p, ss_hit_data_s;
-wire         ss_opm_replay, ss_opm_busy, ss_ym_wr, ss_ym_a0;
+wire         ss_opm_replay, ss_opm_busy, ss_ym_wr, ss_ym_a0, ss_opm_ic;
 wire   [7:0] ss_ym_din;
 wire         ss_opm_hold = ss_halt_snd & ~ss_opm_busy;
 wire         ss_load, ss_save, ss_status_set, info_req;
@@ -1531,7 +1531,7 @@ assign      AUDIO_S = 1;
 
 megasys1_opm ym2151
 (
-    .rst      ( reset | soft_reset ), // reset
+    .rst      ( reset | soft_reset | ss_opm_ic ), // reset
     .clk      ( clk_sys            ), // main clock
     .cen      ( opm_cen            ),
     .cs_n     ( 1'b0               ), // chip select
@@ -2331,12 +2331,16 @@ wire [15:0] m68kp_scr2_reg = ( m68kp_a[2:1] == 0 ) ? m68kp_scr2_reg_x : ( m68kp_
 reg  [14:0] sprite_ram_addr;
 wire [15:0] sprite_ram_dout;
 
+// CPU RAM write enables, off while a restore holds the CPUs in reset
+wire ce_wr_p = ce_cpu_p & ~ss_rst_p;
+wire ce_wr_s = ce_cpu_s & ~ss_rst_p;
+
 // todo: byte writes should mirror to both bytes
 dual_port_ram #(.LEN(32768)) m68kp_ram_h
 (
     .clock_a( clk_sys ),
     .address_a( ss_mram_sel ? ss_mram_addr : hs_mram ? hs_mem_addr[15:1] : m68kp_a[15:1] ),
-    .wren_a( ss_mram_sel ? ss_mram_we : hs_mram ? hs_mem_we : ( !m68kp_rw & m68kp_ram_cs & !m68kp_uds_n & ce_cpu_p & ~ss_hit_p ) ),
+    .wren_a( ss_mram_sel ? ss_mram_we : hs_mram ? hs_mem_we : ( !m68kp_rw & m68kp_ram_cs & !m68kp_uds_n & ce_wr_p & ~ss_hit_p ) ),
     .data_a( ss_mram_sel ? ss_mram_wdata[15:8] : hs_mram ? hs_mem_wdata[15:8] : m68kp_dout[15:8] ),
     .q_a( m68kp_ram_dout[15:8] ),
 
@@ -2351,7 +2355,7 @@ dual_port_ram #(.LEN(32768)) m68kp_ram_l
 (
     .clock_a( clk_sys ),
     .address_a( ss_mram_sel ? ss_mram_addr : hs_mram ? hs_mem_addr[15:1] : m68kp_a[15:1] ),
-    .wren_a( ss_mram_sel ? ss_mram_we : hs_mram ? hs_mem_we : ( !m68kp_rw & m68kp_ram_cs & !m68kp_lds_n & ce_cpu_p & ~ss_hit_p ) ),
+    .wren_a( ss_mram_sel ? ss_mram_we : hs_mram ? hs_mem_we : ( !m68kp_rw & m68kp_ram_cs & !m68kp_lds_n & ce_wr_p & ~ss_hit_p ) ),
     .data_a( ss_mram_sel ? ss_mram_wdata[7:0] : hs_mram ? hs_mem_wdata[7:0] : m68kp_dout[7:0] ),
     .q_a( m68kp_ram_dout[7:0] ),
 
@@ -2387,7 +2391,7 @@ dual_port_ram #(.LEN(32768)) m68ks_ram_h
 (
     .clock_a( clk_sys ),
     .address_a( ss_sram_sel ? ss_sram_addr : m68ks_a[15:1] ),
-    .wren_a( ss_sram_sel ? ss_sram_we : ( !m68ks_rw & m68ks_ram_cs & !m68ks_uds_n & ce_cpu_s & ~ss_hit_s ) ),
+    .wren_a( ss_sram_sel ? ss_sram_we : ( !m68ks_rw & m68ks_ram_cs & !m68ks_uds_n & ce_wr_s & ~ss_hit_s ) ),
     .data_a( ss_sram_sel ? ss_sram_wdata[15:8] : m68ks_dout[15:8] ),
     .q_a( m68ks_ram_dout[15:8] )
 
@@ -2402,7 +2406,7 @@ dual_port_ram #(.LEN(32768)) m68ks_ram_l
 (
     .clock_a( clk_sys ),
     .address_a( ss_sram_sel ? ss_sram_addr : m68ks_a[15:1] ),
-    .wren_a( ss_sram_sel ? ss_sram_we : ( !m68ks_rw & m68ks_ram_cs & !m68ks_lds_n & ce_cpu_s & ~ss_hit_s ) ),
+    .wren_a( ss_sram_sel ? ss_sram_we : ( !m68ks_rw & m68ks_ram_cs & !m68ks_lds_n & ce_wr_s & ~ss_hit_s ) ),
     .data_a( ss_sram_sel ? ss_sram_wdata[7:0] : m68ks_dout[7:0] ),
     .q_a( m68ks_ram_dout[7:0] )
 
@@ -2422,7 +2426,7 @@ dual_port_ram #(.LEN(4096)) m68kp_spr_h
 (
     .clock_a( clk_sys ),
     .address_a( ss_spr_sel ? ss_spr_addr : m68kp_a[12:1] ),
-    .wren_a( ss_spr_sel ? ss_spr_we : ( !m68kp_rw & m68kp_spr_cs & !m68kp_uds_n & ce_cpu_p ) ),
+    .wren_a( ss_spr_sel ? ss_spr_we : ( !m68kp_rw & m68kp_spr_cs & !m68kp_uds_n & ce_wr_p ) ),
     .data_a( ss_spr_sel ? ss_spr_wdata[15:8] : m68kp_dout[15:8] ),
     .q_a( sprite_dout[15:8] ),
 
@@ -2437,7 +2441,7 @@ dual_port_ram #(.LEN(4096)) m68kp_spr_l
 (
     .clock_a ( clk_sys ),
     .address_a ( ss_spr_sel ? ss_spr_addr : m68kp_a[12:1] ),
-    .wren_a ( ss_spr_sel ? ss_spr_we : ( !m68kp_rw & m68kp_spr_cs & !m68kp_lds_n & ce_cpu_p ) ),
+    .wren_a ( ss_spr_sel ? ss_spr_we : ( !m68kp_rw & m68kp_spr_cs & !m68kp_lds_n & ce_wr_p ) ),
     .data_a ( ss_spr_sel ? ss_spr_wdata[7:0] : m68kp_dout[7:0] ),
     .q_a ( sprite_dout[7:0] ),
 
@@ -2456,7 +2460,7 @@ dual_port_ram #(.LEN(8192), .DATA_WIDTH(16)) scroll0_ram
 (
     .clock_a( clk_sys ),
     .address_a( ss_scr0_sel ? ss_scr0_addr : m68kp_a[13:1] ),
-    .wren_a( ss_scr0_sel ? ss_scr0_we : ( !m68kp_rw & m68kp_scr0_cs & ce_cpu_p ) ),
+    .wren_a( ss_scr0_sel ? ss_scr0_we : ( !m68kp_rw & m68kp_scr0_cs & ce_wr_p ) ),
     .data_a( ss_scr0_sel ? ss_scr0_wdata : m68kp_dout ),
     .q_a( m68kp_scroll0_dout ),
 
@@ -2474,7 +2478,7 @@ dual_port_ram #(.LEN(8192), .DATA_WIDTH(16)) scroll1_ram
 (
     .clock_a( clk_sys ),
     .address_a( ss_scr1_sel ? ss_scr1_addr : m68kp_a[13:1] ),
-    .wren_a( ss_scr1_sel ? ss_scr1_we : ( !m68kp_rw & m68kp_scr1_cs & ce_cpu_p ) ),
+    .wren_a( ss_scr1_sel ? ss_scr1_we : ( !m68kp_rw & m68kp_scr1_cs & ce_wr_p ) ),
     .data_a( ss_scr1_sel ? ss_scr1_wdata : m68kp_dout ),
     .q_a( m68kp_scroll1_dout ),
 
@@ -2492,7 +2496,7 @@ dual_port_ram #(.LEN(8192), .DATA_WIDTH(16)) scroll2_ram
 (
     .clock_a( clk_sys ),
     .address_a( ss_scr2_sel ? ss_scr2_addr : hs_scr2 ? hs_mem_addr[13:1] : m68kp_a[13:1] ),
-    .wren_a( ss_scr2_sel ? ss_scr2_we : hs_scr2 ? hs_mem_we : ( !m68kp_rw & m68kp_scr2_cs & ce_cpu_p ) ),
+    .wren_a( ss_scr2_sel ? ss_scr2_we : hs_scr2 ? hs_mem_we : ( !m68kp_rw & m68kp_scr2_cs & ce_wr_p ) ),
     .data_a( ss_scr2_sel ? ss_scr2_wdata : hs_scr2 ? hs_mem_wdata : m68kp_dout ),
     .q_a( m68kp_scroll2_dout ),
 
@@ -2510,7 +2514,7 @@ dual_port_ram #(.LEN(1024), .DATA_WIDTH(16)) palette_ram
 (
     .clock_a( clk_sys ),
     .address_a( ss_pal_sel ? ss_pal_addr : m68kp_a[10:1] ),
-    .wren_a( ss_pal_sel ? ss_pal_we : ( !m68kp_rw & m68kp_pal_cs & ce_cpu_p ) ),
+    .wren_a( ss_pal_sel ? ss_pal_we : ( !m68kp_rw & m68kp_pal_cs & ce_wr_p ) ),
     .data_a( ss_pal_sel ? ss_pal_wdata : m68kp_dout ),
     .q_a( m68kp_palette_dout ),
 
@@ -2712,6 +2716,7 @@ megasys1_opm_shadow #(.SS_IDX_REGS(SSIDX_OPM_REGS), .SS_IDX_MISC(SSIDX_OPM_MISC)
     .ym_wr(ss_ym_wr),
     .ym_a0(ss_ym_a0),
     .ym_din(ss_ym_din),
+    .ym_ic(ss_opm_ic),
     .ym_busy(ym2151_dout[7]),
     .ssb_regs(ssb[SSIDX_OPM_REGS]),
     .ssb_misc(ssb[SSIDX_OPM_MISC])
@@ -2979,7 +2984,11 @@ reg         sdram_req;
 wire        sdram_ack;
 wire        sdram_valid;
 wire        sdram_done;
-wire [63:0] sdram_q;
+
+// DQ sampled every clk_sys in the pin input registers; the last four samples are the read burst
+reg  [15:0] sdram_dq_s0, sdram_dq_s1, sdram_dq_s2, sdram_dq_s3;
+always @(posedge clk_sys) { sdram_dq_s3, sdram_dq_s2, sdram_dq_s1, sdram_dq_s0 } <= { sdram_dq_s2, sdram_dq_s1, sdram_dq_s0, SDRAM_DQ };
+wire [63:0] sdram_q = { sdram_dq_s3, sdram_dq_s2, sdram_dq_s1, sdram_dq_s0 };
 
 sdram #(.CLK_FREQ( (72.0)), .DATA_WIDTH(64), .BURST_LENGTH(4), .CAS_LATENCY(2) ) sdram
 (
@@ -2995,7 +3004,7 @@ sdram #(.CLK_FREQ( (72.0)), .DATA_WIDTH(64), .BURST_LENGTH(4), .CAS_LATENCY(2) )
 
   .ack(sdram_ack),
   .valid(sdram_valid),
-  .q(sdram_q),
+  .q(),
 
   // SDRAM interface
   .sdram_a(SDRAM_A),

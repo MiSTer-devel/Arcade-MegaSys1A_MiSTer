@@ -400,6 +400,7 @@ module megasys1_opm_shadow #(parameter SS_IDX_REGS = -1, parameter SS_IDX_MISC =
     output reg       ym_wr,
     output reg       ym_a0,
     output reg [7:0] ym_din,
+    output reg       ym_ic = 1'b0,
     input            ym_busy,
 
     ssbus_if.slave   ssb_regs,
@@ -476,7 +477,7 @@ always @(posedge clk) begin
     end
 end
 
-// replay order: 0x20-0xff, globals, timers and 0x14, AMD, PMD, key-on per channel, then the address latch
+// replay: chip reset, then written registers 0x20-0xff, globals, timers and 0x14, AMD, PMD, key-on per channel, address latch
 reg  [7:0] step;
 reg  [7:0] s_reg;
 reg        s_ram;
@@ -518,9 +519,9 @@ always @* begin
     s_valid = ( step < 8'd234 ) ? valid[s_reg] : 1'b1;
 end
 
-typedef enum logic [3:0] { P_IDLE, P_PREP, P_READ, P_DATA, P_AW, P_AW_GAP, P_DW, P_DW_WAIT } pstate_t;
+typedef enum logic [3:0] { P_IDLE, P_IC, P_IC_GAP, P_PREP, P_READ, P_DATA, P_AW, P_AW_GAP, P_DW, P_DW_WAIT } pstate_t;
 pstate_t   ps = P_IDLE;
-reg [10:0] cnt;
+reg [11:0] cnt;
 reg  [7:0] data_r;
 
 assign busy = ( ps != P_IDLE );
@@ -529,10 +530,26 @@ always @(posedge clk) begin
     case ( ps )
         P_IDLE: begin
             ym_wr <= 0;
+            ym_ic <= 0;
             if ( replay ) begin
-                step <= 0;
-                ps   <= P_PREP;
+                step  <= 0;
+                cnt   <= 0;
+                ym_ic <= 1;
+                ps    <= P_IC;
             end
+        end
+        // chip reset first, so registers the saved state never wrote are back at their reset value 0
+        P_IC: begin
+            cnt <= cnt + 1'd1;
+            if ( cnt == 12'd4095 ) begin
+                ym_ic <= 0;
+                cnt   <= 0;
+                ps    <= P_IC_GAP;
+            end
+        end
+        P_IC_GAP: begin
+            cnt <= cnt + 1'd1;
+            if ( cnt == 12'd511 ) ps <= P_PREP;
         end
         P_PREP: begin
             rp_addr <= s_reg;
